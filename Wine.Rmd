@@ -1,0 +1,379 @@
+---
+title: "Final Project: Clustering analysis on wine dataset."
+author: 
+  - Marina Moreno González
+  - Belén Pulido Bravo
+date: March 14, 2020
+output:
+  html_document:
+    theme: readable
+    highlight: default
+    toc: true
+    toc_depth: 2
+    number_sections: false
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+```
+
+```{r include = FALSE}
+library(rattle.data)
+library(mixAK)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(corrplot)
+library(gridExtra)
+library(ggplot2)
+library(MCMCglmm)
+library(stats)
+
+data(wine)
+attach(wine)
+
+```
+
+Our final project consits on the study of the wine dataset. The analysis will count with two sections: Descriptive and clustering analysis.
+
+The dataset contains the results of a chemical analysis of wines grown in a specific area of Italy. Three types of wine are represented in the 178 samples, with the results of 13 chemical analyses recorded for each sample.
+
+The 13 variables correspond to the following fields:
+
+- Alcohol: Percentage of alcohol
+- Malic: The quantity of malic acid (one of the fixed acids found in wine grapes)
+- Ash: The quantity of ash (dependent on mineral content)
+- Alcalinity: Meassures the alkalinity of the ash (defined as the sum of cations, other than the ammonium ion, combined with the organic acids in the wine)
+- Magnesium: The quantity of magnesium that appears in the wine
+- Phenols: Total phenols
+- Flavanoids: The quantity of flavanoid phenols
+- Nonflavanoids: The quantity of nonflavanoid phenols
+- Proanthocyanins: The quantity of proanthocyanidins (another type of phenol)
+- Color: Color intensity
+- Hue: The hue of a wine (typically determined by the color of the cultivar used)
+- Dilution: D280/OD315 of diluted wines
+- Proline: The quantity of proline (an amino acid present in wines)
+
+It was obtained from the UCI Machine Learning Repository which is available in the rattle.data package: https://rdrr.io/cran/rattle.data/man/wine.html
+
+
+# Descriptive analysis
+
+In order to obtain a deeper understanding of the selected dataset, there will be performed a descriptive analysis of the variables.
+
+The first study consists on determining whether the dataset is balanced or not. As the following pie chart reflects, there exists an equilibrium among the wine classes.
+
+```{r echo=FALSE}
+print(paste("The number of wines in class 1 is ",sum(wine$Type==1)))
+print(paste("The number of wines in class 2 is ",sum(wine$Type==2)))
+print(paste("The number of wines in class 3 is ",sum(wine$Type==3)))
+```
+
+```{r echo = FALSE}
+pie(table(wine$Type), main = "Pie Chart of the Wine data set Types",
+    col = c("coral2", "deepskyblue2", "chartreuse2"), radius = 1)
+
+```
+
+
+Secondly, the information about each variable is examined. The following analysis of the variables detects that they have different ranges. For example, Malic ranges from $0.740$ to $5.800$ while Proline ranges from $278.0$ to $1680.0$. 
+
+```{r}
+summary(wine)
+norm.wine <- as.data.frame(scale(wine[,2:14]))
+```
+
+When ploting the variables on a boxplot each, this differences are highly visible. To prevent masking information, the data will be normalized for its use in the forecoming steps.
+
+```{r}
+wine[,2:14] %>%
+  gather(Attributes, values) %>%
+  ggplot(aes(x=reorder(Attributes, values, FUN=median), y=values, fill=Attributes)) +
+  geom_boxplot(show.legend=FALSE) +
+  labs(title="Wines Attributes - Boxplots") +
+  theme_bw() +
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank())  +
+  coord_flip()
+
+```
+
+Since now, we are considering the normalized variables in order to perform the analysis.
+
+We see that the distribution of them is the same as before. It is crutial to keep these information unchange for the clustering step. Since clustering takes into consideration the variables to compute the results, any change of them would lead to a complete different outcome.
+
+```{r}
+# Histogram for each Attribute
+wine %>%
+  gather(Attributes, value, 2:14) %>%
+  ggplot(aes(x=value, fill=Attributes)) +
+  geom_histogram(colour="black", show.legend=FALSE) +
+  facet_wrap(~Attributes, scales="free_x") +
+  labs(x="Values", y="Frequency",
+       title="Wines Attributes - Histograms") +
+  theme_bw()
+```
+
+```{r}
+# Histogram for each Attribute
+norm.wine %>%
+  gather(Attributes, value, 1:13) %>%
+  ggplot(aes(x=value, fill=Attributes)) +
+  geom_histogram(colour="black", show.legend=FALSE) +
+  facet_wrap(~Attributes, scales="free_x") +
+  labs(x="Values", y="Frequency",
+       title="Wines Attributes (Normalized variables) - Histograms") +
+  theme_bw()
+```
+
+Furthermore, in order to observe the differences for each variable between wine types, we plot a boxplot per type for each one of the considered variables. Our aim considering the boxplots per classes is to diferienciate the variables that distinguish better between the three wine classes.
+
+We can conclude that variables as Magnesium or Ash do not properly distinguish between the three different classes. This is due to the fact that the distribution for each of the classes seems to be the same. On the other hand, variables like Alcalinity, Dilution, Flavenoidsand Phenols seems to distinguish really well between the three classes. Nevertheless, there are some variables as Malic, Proline or Hue that seems to distinguish properly two of the three classes, but they would be worse classifying the third one. 
+
+```{r}
+n.wine <- norm.wine
+n.wine$Type <- wine$Type
+
+n.wine %>% gather(1:13, key = "variables", value = "result") %>%
+  ggplot(aes(Type, result, fill = Type)) +
+  geom_boxplot()+
+  theme_classic()+
+  facet_wrap(.~variables, scale = "free")
+```
+
+The correlation between variables is another fact that will help us to choose the variables for our analysis.
+
+If the variables were highly correlated, we would use PCA before performing clustering. Nevertheless, we obtain variables that are not highly linear correlated except for the case Flavenoids $\sim$ Phenols. We are not going to consider both of them since the distribution for each class is really similar.
+
+```{r}
+wine.cor <- cor(norm.wine)
+```
+
+```{r}
+corrplot(wine.cor)
+```
+
+# Clustering
+
+Clustering consits on grouping a set of objects in terms of their similarity. A cluster ideally contains objects which are similar among themselves and different from the ones contained within other clusters.
+
+For this section, different types of clustering analysis will be applied: model-based (bayesian) and deterministic (hierarchical and non-hierachical).
+
+
+## Model-Based
+**(Bayesian clustering)**
+
+This type bases cluster analysis on a probability model. The whole dataset is seen as a population conformed by differnt populations, each with its own distribution. These particular distributions are used as parameters to develop geometrical characteristics that belong to each of the clusters.
+
+For performing the clustering analysis, R is not able to manage all the observations and variables at once. As a solution, we have considered the set of variables that better classify the data in three clusters based of the previous descriptive analysis. 
+
+The variables that have been finally considered for carrying out our analysis are Alcalinity, Alcohol, Dilution, Flavenoids, Hue and Malic.
+
+```{r}
+VARS_ok <- c("Malic", "Flavanoids", "Hue", "Dilution","Alcalinity","Alcohol")
+```
+
+Now, we consider our data as coming from a multivariate Gaussian Mixture and we assume a fixed, known number of mixture components, that in our case is 3. Then, we apply the MCMC algorithm as follows.
+
+```{r include=FALSE}
+set.seed(123)
+```
+
+```{r}
+Prior <- list(priorK = "fixed", Kmax = 3)
+nMCMC <- c(burn=5000, keep=10000, thin=5, info=1000)
+fit.MCMC <- NMixMCMC(y0 = n.wine[, VARS_ok], prior = Prior, nMCMC = nMCMC,
+                   scale = list(shift=0, scale=1), PED = F)
+```
+
+Now, we observe the predicted density functions of the chosen variables. On the density graphs of most of them it can be observed they follow a non-gaussian distribution. This means they contain separated groups which will be easily inferred later. Nevertheless, as it has been previously comented, some of them may classify better in 2 clusters than in 3. 
+
+```{r}
+pdens1 <- NMixPredDensMarg(fit.MCMC, lgrid=150)
+plot(pdens1, main=VARS_ok, xlab=VARS_ok)
+```
+
+```{r}
+pdens2 <- NMixPredDensJoint2(fit.MCMC)
+plot(pdens2, xylab=VARS_ok)
+```
+
+The data set is separated into clusters thanks to the pairs of variables Hue - Flavanoids, Dilution - Flavanoids, Hue - Dilution, Alcohol - Flavenoids and Dilution - Alcohol. So, Alcohol, Flavenoidds and Dilution seems to be the variables distinguishing the most between wine types.
+
+This data set has three types of wines recorded. However, in any case the variables are capable of completely separating the dataset into the three wine classes.
+
+## Deterministic 
+
+Deterministic clustering anlysis classify the observations in a mechanical manner. In the case of **hierarchical clustering**, the procedure consists on linking the observations whose distance is the smallest among the set. On the other hand, **non-hierarchical clustering** is based on iterative realocation. That is, the observations are set into different clusters until they present an optimal distribution.
+
+For the shake of comparing both methods, we created a costumed function. The following function, given a data set previously classified in 3 groups (as it is our case) and a deterministic fit with 3 clusters, returns a confusion matrix for the classification.
+
+```{r}
+fclus <- function(datafr,km.fit){
+  
+  #datafr is the data frame that may have a column called Type
+  #km.fit is the determinitic fit
+  #This function works when we have 3 clusters and we have a previous classification in 3 classes
+  
+W1C1 <- 0
+W1C2 <- 0
+W1C3 <- 0
+W2C1 <- 0
+W2C2 <- 0
+W2C3 <- 0
+W3C1 <- 0
+W3C2 <- 0
+W3C3 <- 0
+
+for (i in 1:length(datafr$Type)){
+  if ((datafr$Type[i]==1)&(km.fit$cluster[i]==1)){
+    W1C1 <- W1C1+1
+  }
+  else if ((datafr$Type[i]==1)&(km.fit$cluster[i]==2)){
+    W1C2 <- W1C2+1
+  }
+  else if ((datafr$Type[i]==1)&(km.fit$cluster[i]==3)){
+    W1C3 <- W1C3+1
+  }
+  else if ((datafr$Type[i]==2)&(km.fit$cluster[i]==1)){
+    W2C1 = W2C1+1
+  }
+  else if ((datafr$Type[i]==2)&(km.fit$cluster[i]==2)){
+    W2C2 = W2C2+1
+  }
+  else if ((datafr$Type[i]==2)&(km.fit$cluster[i]==3)){
+    W2C3 = W2C3+1
+  }
+   else if ((datafr$Type[i]==3)&(km.fit$cluster[i]==1)){
+    W3C1 = W3C1+1
+  }
+  else if ((datafr$Type[i]==3)&(km.fit$cluster[i]==2)){
+    W3C2 = W3C2+1
+  }
+  else {
+    W3C3 = W3C3+1
+  }
+}
+C1 <- c(W1C1,W2C1,W3C1,sum(W1C1,W2C1,W3C1))
+C2 <- c(W1C2,W2C2,W3C2,sum(W1C2,W2C2,W3C2))
+C3 <- c(W1C3,W2C3,W3C3,sum(W1C3,W2C3,W3C3))
+Total <- c(sum(W1C1,W1C2,W1C3),sum(W2C1,W2C2,W2C3),sum(W3C1,W3C2,W3C3),length(wine$Type))
+
+
+datf <- data.frame(C1,C2,C3,Total)
+rn <- c("W1","W2","W3","Total")
+row.names(datf) <- rn
+
+return(datf)
+}
+  
+```
+
+### Hierarchical
+
+As mentioned beforehand, this deterministc method relies on the idea of distances. The objects which are place further from a given observation will be less similar to those which lie nearby. Thus, they will be grouped together iteratively until no more observations are left. In our case, we are defining the concept of being similar by considering the Average Linkage criterion, where the distance between each pair of observations in each cluster are added up and divided by the number of pairs to get an average inter-cluster distance.
+
+In this case we are going to consider again the reduced set of variables in order finally compare the obtained results.
+
+Distances will be computed using the normalized set of observations. Each observation will be considered as a vector and it will be compared to the rest of vectors using the Euclidean distance. That is, $$d_2({\bf x},{\bf y})=\sqrt{{\bf (x}-{\bf y})'({\bf x}-{\bf y})}=\sqrt{\sum_{i=1}^{13} (x_{i}-y_{i})^2}$$
+ where $\bf{x}$ and $\bf{y}$ are two elements of the sample.
+ 
+Carrying out the following step, there will be performed the linkage step. On it, the observations will be joined on a sequential manner given the distances between them. The results will be ploted on a dendogram. The tree-shaped graph will be cuted at the level it creates three clusters.
+
+```{r}
+winec <- n.wine[,VARS_ok]
+winec$Type <- n.wine$Type
+wine_label <- winec$Type
+dis_mat <- dist(winec, method = 'euclidean')
+hclust_avg <- hclust(dis_mat, method = 'average')
+
+cut_avg <- cutree(hclust_avg, k = 3)
+
+plot(hclust_avg)
+rect.hclust(hclust_avg , k = 3, border = 2:6)
+abline(h = 3, col = 'red')
+
+```
+
+
+```{r}
+wine_clusters <- mutate(winec, cluster = cut_avg)
+fclus(winec,wine_clusters)
+```
+
+It can be observed that all the wines belonging to the third class are correctly classified, while the other two classes are mixed in one group obtaining a third cluster which only has one observation. This leads us to the conclusion that this method is not able to classify the wines in three classes, but properly distinguishes two.
+
+The reason this method does not classify well may be that it is very sensitive to outliers.
+
+### Non-hierarchical
+
+On the ohter hand, two different non-hierarchical methods are considered: Kmeans and EM algorithms.
+
+Kmeans is a non-hierarchical method which partions the data space into k clusters and optimizes them to reach the smallest whithin-cluster variance (that is, to set the most similar observations into the same cluster).
+
+We fit Kmeans to the our data considering again the reduced set of variables.
+
+```{r}
+kmeans.fit.n <- kmeans(n.wine[,VARS_ok],centers=3,iter.max=1000,nstart=100)
+```
+
+```{r}
+res2 <- fclus(n.wine,kmeans.fit.n)
+res2
+```
+
+As with the previous clustering method, the wine types distributed across the clusters were recorded on a table.
+
+Comparing this matrix to the prior method (hierarchical clustering) it could be seen that it makes a more accurate classification.
+
+So far, this is the classification method that achieved better results. Each of the wine types is almost contained on just a cluster, with the exception of a couple of observations. Again, the observations corresponding to the third wine type are completely well classified, but in this case the other two groups are well distinguished.
+
+Now, EM algorithm is applied. The EM (Expectation - Mximization) method is similar to the K-Means method. The EM clustering algorithm computes probabilities of cluster memberships based on one or more probability distributions instead of assigning the elements to the cluster where the variance is minimized. In this case we are considering multinormal gaussian distributions.
+
+```{r}
+EM.fit <- NMixEM(n.wine[,VARS_ok], K = 3)
+EM.fit
+```
+
+We observe that the weights for each cluster are 0.1397355, 0.7100897 and 0.1501748 respectively. This means 71% of the observations are grouped in the same cluster, so the obtained classification is not taking into account the real behaviour of the data. 
+
+
+# Verification
+
+We have considered a set with a reduced number of variables due to the fact that to perform MCMC we have an issue when the number of variables was big. As we have obtained Kmeans as the best method, we are going to compare the previous fit with the one considering the complete set of variables. 
+
+The classification using Kmeans with all the variables is performed as follows.
+
+```{r}
+kmeans.fit.n.all <- kmeans(norm.wine,centers=3,iter.max=1000,nstart=100)
+```
+
+```{r}
+res3 <- fclus(n.wine,kmeans.fit.n.all)
+res3
+```
+
+Now the previous classification is showed.
+
+```{r}
+res2
+```
+
+We obtain a really small difference between the results, so we can conclude that the reduced set of variables is propperly chosen.
+
+# Conclusions
+
+Performing a descriptive analysis of the variables helped us to understand better the dataset we were working with. The variables showed high difference in ranges that could be fixed through normalization. Later, thanks to the representation of all of the variables by means of the wine type, it could be decided which were more relevant for performing the clustering analysis. The correlation matrix allowed us to reject one of those variables which presented very related information.
+
+Regarding the clustering analysis, each of the three methods present different outcomes. Neither bayesian nor hierarchical clustering were able to classify accurately our dataset. Both of them could only divide the observations on two clusters. Finally, when considering non-hierarchical clustering EM missclasified the data while Kmeans was able to practically fit all the observations into their original groups.
+
+Moreover, in order to verify we were not choosing variables not distinguishing well between the three wine types we had compare the best obtained result with the one considering all the variables.
